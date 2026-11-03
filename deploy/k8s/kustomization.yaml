@@ -1,0 +1,14 @@
+# kubectl apply -k deploy/k8s   (after editing config.yaml and creating the secret, see secret.example.yaml)
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: kg
+resources:
+  - namespace.yaml
+  - config.yaml
+  - neo4j.yaml
+  - ingest-cronjob.yaml
+  - mcp.yaml
+images:
+  - name: kg
+    newName: nexus.example.local:5000/kg   # your registry
+    newTag: "0.1.0"

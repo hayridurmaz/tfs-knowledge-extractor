@@ -1,0 +1,5 @@
+{
+  "name": "web-app",
+  "dependencies": { "react": "^18.3.1", "axios": "^1.7.0", "react-router-dom": "^6.26.0" },
+  "devDependencies": { "vite": "^5.0.0" }
+}

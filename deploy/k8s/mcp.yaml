@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kg-mcp
+spec:
+  replicas: 2                       # stateless HTTP; safe to scale
+  selector: { matchLabels: { app: kg-mcp } }
+  template:
+    metadata: { labels: { app: kg-mcp } }
+    spec:
+      containers:
+        - name: mcp
+          image: kg
+          args: ["serve"]
+          ports: [{ name: http, containerPort: 8000 }]
+          envFrom:
+            - configMapRef: { name: kg-config }
+          env:
+            - name: KG_NEO4J_PASSWORD
+              valueFrom: { secretKeyRef: { name: kg-secrets, key: KG_NEO4J_PASSWORD } }
+          readinessProbe:
+            tcpSocket: { port: 8000 }
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 200m, memory: 256Mi }
+            limits: { memory: 1Gi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kg-mcp
+spec:
+  selector: { app: kg-mcp }
+  ports: [{ name: http, port: 80, targetPort: 8000 }]
+---
+# The graph contains all source code: expose it only inside the corporate network.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: kg-mcp
+spec:
+  rules:
+    - host: kg-mcp.example.local
+      http:
+        paths:
+          - path: /mcp
+            pathType: Prefix
+            backend: { service: { name: kg-mcp, port: { number: 80 } } }

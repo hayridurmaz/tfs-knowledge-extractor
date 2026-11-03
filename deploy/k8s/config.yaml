@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kg-config
+data:
+  KG_ADO_URL: "https://tfs.example.local/tfs/DefaultCollection"   # collection URL
+  KG_ADO_PROJECT: "YourProject"
+  KG_ADO_API_VERSION: "5.0"          # works on Azure DevOps Server 2019+
+  KG_REPO_EXCLUDE: ""                # regex, e.g. "^(sandbox|archive)-"
+  KG_NEO4J_URI: "bolt://neo4j:7687"
+  KG_DATA_DIR: "/data"
+  # KG_CA_BUNDLE: "/etc/kg-ca/ca.crt" # mount your corporate CA if TFS uses an internal certificate

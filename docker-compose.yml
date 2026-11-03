@@ -1,0 +1,30 @@
+# Local development: Neo4j + the MCP server.
+#   docker compose up -d neo4j
+#   kg ingest --local-path tests/fixtures/repos      (or real mirrors, see README)
+#   docker compose up -d mcp                          -> http://localhost:8000/mcp
+services:
+  neo4j:
+    image: neo4j:5.26-community
+    environment:
+      NEO4J_AUTH: neo4j/${KG_NEO4J_PASSWORD:-devpassword}
+      NEO4J_server_memory_heap_max__size: 2G
+      NEO4J_server_memory_pagecache_size: 1G
+    ports: ["7474:7474", "7687:7687"]
+    volumes: [neo4j-data:/data]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 >/dev/null || exit 1"]
+      interval: 5s
+      retries: 30
+
+  mcp:
+    build: .
+    command: ["serve"]
+    environment:
+      KG_NEO4J_URI: bolt://neo4j:7687
+      KG_NEO4J_PASSWORD: ${KG_NEO4J_PASSWORD:-devpassword}
+    ports: ["8000:8000"]
+    depends_on:
+      neo4j: { condition: service_healthy }
+
+volumes:
+  neo4j-data:

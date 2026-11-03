@@ -1,0 +1,5 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <groupId>com.acme</groupId>
+  <artifactId>common-lib</artifactId>
+  <version>1.0.0</version>
+</project>

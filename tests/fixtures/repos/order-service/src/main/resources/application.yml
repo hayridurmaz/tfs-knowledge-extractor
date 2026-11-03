@@ -1,0 +1,19 @@
+spring:
+  application:
+    name: order-service
+  datasource:
+    url: jdbc:postgresql://db/orders
+    password: secret-should-not-be-stored
+app:
+  payment:
+    timeout-ms: 3000
+  topics:
+    order-created: order-created
+---
+spring:
+  config:
+    activate:
+      on-profile: prod
+app:
+  payment:
+    timeout-ms: 5000
