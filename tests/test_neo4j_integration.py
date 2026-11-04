@@ -102,3 +102,25 @@ def test_mcp_tools_registered():
     server = create_server(Settings())
     names = {t.name for t in anyio.run(server.list_tools)}
     assert {"search", "find_symbol", "get_node", "callers", "callees", "impact", "endpoints", "cypher"} <= names
+
+
+def test_oversized_indexed_values_are_written(q):
+    """A huge string literal used as URL/topic must not fail the load (range index key limit ~8 KB)."""
+    from kg.graph import Graph
+    from kg.store import Store
+
+    huge = "/api/" + "x" * 20000
+    g = Graph()
+    g.node("repo:huge-repo", "Repository", name="huge-repo", repo="huge-repo")
+    g.node(f"topic:{huge}", "Topic", name=huge, repo="huge-repo")
+    g.node("api:huge-repo:A.java:1", "ApiCall", name=f"GET {huge}", url=huge, repo="huge-repo", path="A.java")
+    g.edge("PUBLISHES", "api:huge-repo:A.java:1", f"topic:{huge}")
+    st = Store(Settings())
+    try:
+        st.write_graph(g, "run-huge", ["huge-repo"], full=False)
+        st.write_graph(g, "run-huge-2", ["huge-repo"], full=False)  # rerun merges onto the same nodes
+        rows = st.run("MATCH (a:ApiCall {repo: 'huge-repo'})-[:PUBLISHES]->(t:Topic) RETURN a.url AS url")
+        assert len(rows) == 1 and rows[0]["url"] == huge
+    finally:
+        st.run("MATCH (n:Node {repo: 'huge-repo'}) DETACH DELETE n")
+        st.close()

@@ -1,6 +1,7 @@
 """Neo4j persistence: schema, batched idempotent upserts, and sweeping of stale code facts."""
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 import time
@@ -26,6 +27,35 @@ SCHEMA = [
     "ON EACH [n.name, n.fqn, n.path, n.signature, n.doc, n.tokens, n.url, n.key]",
     "CREATE FULLTEXT INDEX node_code IF NOT EXISTS FOR (n:Method|Function|Class) ON EACH [n.code]",
 ]
+
+
+# Range indexes (and the id constraint) reject values over ~8 KB ("Property value is too large to index").
+# Some of these properties come from free text in source code (a huge string literal used as a URL, topic or
+# route), so cap them here. Full-text indexes have no such limit, and `url`/`code` stay complete.
+RANGE_INDEXED = ("name", "fqn", "repo", "path", "path_norm")
+MAX_INDEXED_BYTES = 4000
+MAX_ID_BYTES = 1000
+
+
+def _cap(value: str, limit: int) -> str:
+    b = value.encode()
+    return value if len(b) <= limit else b[:limit].decode(errors="ignore") + "…"
+
+
+def safe_id(node_id: str) -> str:
+    """Deterministic short form of an over-long id, so reruns MERGE onto the same node."""
+    if len(node_id.encode()) <= MAX_ID_BYTES:
+        return node_id
+    return _cap(node_id, 200) + "#" + hashlib.sha1(node_id.encode()).hexdigest()
+
+
+def safe_props(props: dict) -> dict:
+    out = dict(props)
+    for k in RANGE_INDEXED:
+        v = out.get(k)
+        if isinstance(v, str) and len(v.encode()) > MAX_INDEXED_BYTES:
+            out[k] = _cap(v, MAX_INDEXED_BYTES)
+    return out
 
 
 def driver(settings: Settings) -> Driver:
@@ -60,9 +90,18 @@ class Store:
     def write_graph(self, g: Graph, run_id: str, repos: list[str], full: bool) -> dict:
         t0 = time.time()
         groups: dict[tuple[str, ...], list[dict]] = defaultdict(list)
+        capped = 0
         for n in g.nodes.values():
             labels = tuple(sorted({n.label, *n.extra_labels}))
-            groups[labels].append({"id": n.id, "p": n.props})
+            props = safe_props(n.props)
+            nid = safe_id(n.id)
+            if props != n.props or nid != n.id:
+                capped += 1
+                if capped <= 5:
+                    log.warning("capped over-long indexed value on %s node %s", n.label, nid[:200])
+            groups[labels].append({"id": nid, "p": props})
+        if capped:
+            log.warning("capped over-long indexed values on %d nodes", capped)
         remove = ":".join(OPTIONAL_LABELS)
         for labels, rows in groups.items():
             set_labels = ":".join(_label(x) for x in labels)
@@ -72,7 +111,7 @@ class Store:
             self._batched(q, rows, run=run_id)
         by_type: dict[str, list[dict]] = defaultdict(list)
         for e in g.edges.values():
-            by_type[e.type].append({"s": e.src, "t": e.dst, "p": e.props})
+            by_type[e.type].append({"s": safe_id(e.src), "t": safe_id(e.dst), "p": e.props})
         for typ, rows in by_type.items():
             q = (f"UNWIND $rows AS r MATCH (a:Node {{id: r.s}}) MATCH (b:Node {{id: r.t}}) "
                  f"MERGE (a)-[e:{_label(typ)}]->(b) SET e = r.p, e.run = $run, e.src = 'code'")
