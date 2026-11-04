@@ -38,6 +38,27 @@ docker compose run --rm ingest ingest --local-path /repos   # or index checkouts
 docker compose run --rm ingest stats
 ```
 
+### Checking the ADO connection
+
+Before the first ingest, list the repos the job would fetch (nothing is cloned):
+
+```bash
+docker compose run --rm --entrypoint python ingest -c "from kg.config import Settings; from kg.sources.ado import AdoClient; r=AdoClient(Settings()).list_repos(); print(len(r),'repos'); [print(x.name, x.default_branch, x.remote_url) for x in r[:10]]"
+```
+
+| Error | Meaning |
+|---|---|
+| `401` | PAT is wrong or lacks the Code (Read) scope |
+| `404` | `KG_ADO_URL` (collection URL, no project, no trailing slash) or `KG_ADO_PROJECT` is wrong |
+| `CERTIFICATE_VERIFY_FAILED` | Internal CA: put it in `./certs/ca.crt` and set `KG_CA_BUNDLE=/certs/ca.crt` |
+| `ConnectTimeout` | The TFS host is not reachable from the container: check the proxy (`HTTPS_PROXY` in `.env`), VPN/Docker networking, and the port/scheme in `KG_ADO_URL` |
+
+To test raw network access from the container (replace the host and port):
+
+```bash
+docker compose run --rm --entrypoint python ingest -c "import socket; h='tfs.example.local'; p=443; print('ip:', socket.gethostbyname(h)); socket.create_connection((h,p),5); print('tcp ok')"
+```
+
 ## Local quickstart
 
 ```bash

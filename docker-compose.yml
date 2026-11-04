@@ -22,6 +22,10 @@ x-kg: &kg
     KG_REPO_EXCLUDE: ${KG_REPO_EXCLUDE:-}
     KG_VERIFY_SSL: ${KG_VERIFY_SSL:-true}
     KG_CA_BUNDLE: ${KG_CA_BUNDLE:-}
+    # Corporate HTTP proxy, used by both the REST client (httpx) and git. Empty = direct connection.
+    HTTPS_PROXY: ${HTTPS_PROXY:-}
+    HTTP_PROXY: ${HTTP_PROXY:-}
+    NO_PROXY: ${NO_PROXY:-neo4j,localhost,127.0.0.1}
   depends_on:
     neo4j: { condition: service_healthy }
 
