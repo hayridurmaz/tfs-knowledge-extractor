@@ -53,11 +53,38 @@ docker compose run --rm --entrypoint python ingest -c "from kg.config import Set
 | `CERTIFICATE_VERIFY_FAILED` | Internal CA: put it in `./certs/ca.crt` and set `KG_CA_BUNDLE=/certs/ca.crt` |
 | `ConnectTimeout` | The TFS host is not reachable from the container: check the proxy (`HTTPS_PROXY` in `.env`), VPN/Docker networking, and the port/scheme in `KG_ADO_URL` |
 
-To test raw network access from the container (replace the host and port):
+### Troubleshooting `ConnectTimeout`
 
+The container resolved the host but got no answer at the network level, so the PAT and URL path are not the problem yet.
+Compare what the container sees with what your PC can reach (replace the host and port with the ones in `KG_ADO_URL`):
+
+**1. Settings the container actually uses** (the PAT is not printed):
+```bash
+docker compose run --rm --entrypoint python ingest -c "from kg.config import Settings; s=Settings(); print('url=', repr(s.ado_url)); print('project=', repr(s.ado_project)); print('pat set=', bool(s.ado_pat)); import os; print('proxy=', os.environ.get('HTTPS_PROXY'))"
+```
+`url` must match the browser address exactly, including `http`/`https` and any port (TFS often runs on `:8080`).
+
+**2. From your PC** (PowerShell):
+```powershell
+Test-NetConnection tfs.example.local -Port 443
+Resolve-DnsName tfs.example.local
+curl.exe -v -u ":YOUR_PAT" "https://tfs.example.local/tfs/DefaultCollection/_apis/projects?api-version=5.0"
+Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' | Select ProxyEnable,ProxyServer,AutoConfigURL
+```
+
+**3. From the container:**
 ```bash
 docker compose run --rm --entrypoint python ingest -c "import socket; h='tfs.example.local'; p=443; print('ip:', socket.gethostbyname(h)); socket.create_connection((h,p),5); print('tcp ok')"
 ```
+
+| PC (step 2) | Container (step 3) | Cause and fix |
+|---|---|---|
+| Fails | Fails | Wrong host, port or scheme, or TFS is only reachable through the browser's proxy |
+| Works | Different IP than `Resolve-DnsName` | Split DNS: add `extra_hosts: ["tfs.example.local:10.x.x.x"]` to the `ingest` service |
+| Works | Same IP, times out | Proxy: if `ProxyServer`/`AutoConfigURL` is set, put `HTTPS_PROXY=http://<proxy>:<port>` in `.env` (for a PAC file, open it to find the proxy). No proxy: the VPN is not routed into the Docker VM; check Docker Desktop → Settings → Resources → Network/Proxies or enable WSL mirrored networking, then restart Docker |
+| Works | `tcp ok` | Network is fine: re-check `KG_ADO_URL` against the browser address |
+
+If TFS is internal and the proxy blocks it, add the TFS host to `NO_PROXY` instead.
 
 ## Local quickstart
 
