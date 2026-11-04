@@ -24,6 +24,20 @@ src/kg/
 deploy/k8s/            Rancher manifests: Neo4j, nightly ingest CronJob, MCP Deployment
 ```
 
+## Run with Docker only (no Python needed)
+
+GitHub Actions (`.github/workflows/docker.yml`) runs the tests, then publishes
+`ghcr.io/hayridurmaz/tfs-knowledge-extractor` (`latest` from `main`, `0.1.0` from tag `v0.1.0`, `sha-<commit>`).
+
+```bash
+docker login ghcr.io                      # only while the repo/package is private (PAT with read:packages)
+cp .env.example .env                      # optional: ADO URL, project, PAT
+docker compose up -d                      # Neo4j + MCP server -> http://localhost:8000/mcp
+docker compose run --rm ingest            # fetch from ADO and load the graph
+docker compose run --rm ingest ingest --local-path /repos   # or index checkouts placed in ./repos
+docker compose run --rm ingest stats
+```
+
 ## Local quickstart
 
 ```bash

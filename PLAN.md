@@ -12,7 +12,8 @@ Design: [ARCHITECTURE.md](ARCHITECTURE.md). Setup and usage: [README.md](README.
 | Source control / work items | Azure DevOps Server (version unknown), **PAT auth**, 1 collection, 1 project, ~100 **Git** repos, PBIs and Bugs |
 | Docs | Confluence on-prem (version unknown), **PAT auth**, 1 space |
 | Code | Mostly Java (Spring Boot) and React |
-| LLM | DeepSeek "flash" via the company's OpenAI-compatible endpoint, 0.5M context. **No embedding model confirmed** |
+| LLM | DeepSeek "flash" via the company's OpenAI-compatible endpoint, 0.5M context |
+| Embeddings (2026-11-04) | Company hosts **`intfloat/multilingual-e5-large`** and **`Qwen3-Embedding-8B`**. Endpoint URL / API shape not yet confirmed |
 | Infra | Rancher Kubernetes; Nexus proxy for pip/npm/Docker; any open-source license OK |
 | Content language | Mixed (Turkish + English), so multilingual embeddings are needed later |
 | Consumers | opencode and Claude Code (MCP) |
@@ -25,8 +26,12 @@ Design: [ARCHITECTURE.md](ARCHITECTURE.md). Setup and usage: [README.md](README.
   `from mcp.server.mcpserver import MCPServer`; streamable HTTP, stateless).
 - Index the **default branch** of each repo only.
 - The graph's structure is deterministic (parsers, APIs, regexes). **The LLM is used only for enrichment** (phase 4).
-- **Embeddings are deferred.** The user is checking whether the company offers an embedding endpoint. Fallback: self-host
-  `bge-m3` with HuggingFace TEI on Rancher. Neo4j full-text search covers search until then.
+- **Embeddings: use the company-hosted `Qwen3-Embedding-8B`** (proposed, 2026-11-04). It has a 32k-token context (fits whole
+  methods and Confluence sections), is strong on multilingual TR+EN and code, and supports Matryoshka truncation, so store
+  **1024 dims** (request `dimensions=1024`, or truncate client-side and L2-renormalize) to keep the Neo4j vector index small.
+  Queries get an instruction prefix (`Instruct: <task>\nQuery: <q>`); documents get none.
+  Fallback: `multilingual-e5-large` (1024 dims, **512-token limit**, needs `query: ` / `passage: ` prefixes, weaker on code).
+  Self-hosting `bge-m3` is no longer needed. Neo4j full-text search remains the keyword half of hybrid search.
 - Each nightly run rebuilds the desired state in full (cheap thanks to the parse cache keyed by blob SHA), then sweeps
   stale nodes and edges using the `run` stamp.
 
@@ -93,7 +98,7 @@ Planned design:
   + hunk→method mapping), `src/kg/store.py` (history writer), `src/kg/queries.py` + `mcp_server.py` (tools),
   `tests/test_history.py` (a fixture repo with a few commits made in a temp dir, like `tests/test_sources.py`).
 
-### Phase 3: Confluence + semantic search (blocked on the embedding decision)
+### Phase 3: Confluence + semantic search (unblocked: Qwen3-Embedding-8B, see §2)
 
 - Confluence REST: `GET /rest/api/content?spaceKey=..&expand=body.storage,version,ancestors` (paged), incremental
   via CQL `space=X and lastmodified > "<watermark>"`.
@@ -117,10 +122,10 @@ Planned design:
 
 ## 4. Open questions for the user
 
-1. Does the company provide an embedding endpoint (which model)? This blocks phase 3.
+1. ~~Embedding endpoint?~~ Answered: e5-large and Qwen3-Embedding-8B. Still needed: the endpoint URL, whether it is
+   OpenAI-compatible `/v1/embeddings`, whether it honors `dimensions`, and batch/rate limits.
 2. Which ADO Server version? (`_apis` 5.0 is assumed.) Is a corporate CA needed?
 3. Which work item types and states matter, and is 24 months the right window?
-4. Is a GPU node available on Rancher, if we self-host embeddings?
 
 ## 5. Resuming on a new machine
 

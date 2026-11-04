@@ -1,30 +1,61 @@
-# Local development: Neo4j + the MCP server.
-#   docker compose up -d neo4j
-#   kg ingest --local-path tests/fixtures/repos      (or real mirrors, see README)
-#   docker compose up -d mcp                          -> http://localhost:8000/mcp
+# Runs everything from the published image: no local Python needed.
+#
+#   docker compose up -d                          Neo4j + MCP server  -> http://localhost:8000/mcp
+#   docker compose run --rm ingest                fetch ADO repos, parse, load the graph (needs KG_ADO_* in .env)
+#   docker compose run --rm ingest ingest --local-path /repos   index folders under ./repos instead of ADO
+#   docker compose run --rm ingest stats          node/edge counts
+#
+# Every setting has a default; put overrides in a .env file next to this one (see .env.example).
+# The image is pulled from GHCR; if it cannot be pulled, Compose builds it from this folder.
+
+x-kg: &kg
+  image: ${KG_IMAGE:-ghcr.io/hayridurmaz/tfs-knowledge-extractor:latest}
+  build: .
+  environment:
+    KG_NEO4J_URI: bolt://neo4j:7687
+    KG_NEO4J_PASSWORD: ${KG_NEO4J_PASSWORD:-devpassword}
+    KG_ADO_URL: ${KG_ADO_URL:-}
+    KG_ADO_PROJECT: ${KG_ADO_PROJECT:-}
+    KG_ADO_PAT: ${KG_ADO_PAT:-}
+    KG_ADO_API_VERSION: ${KG_ADO_API_VERSION:-5.0}
+    KG_REPO_INCLUDE: ${KG_REPO_INCLUDE:-}
+    KG_REPO_EXCLUDE: ${KG_REPO_EXCLUDE:-}
+    KG_VERIFY_SSL: ${KG_VERIFY_SSL:-true}
+    KG_CA_BUNDLE: ${KG_CA_BUNDLE:-}
+  depends_on:
+    neo4j: { condition: service_healthy }
+
 services:
   neo4j:
     image: neo4j:5.26-community
     environment:
       NEO4J_AUTH: neo4j/${KG_NEO4J_PASSWORD:-devpassword}
-      NEO4J_server_memory_heap_max__size: 2G
-      NEO4J_server_memory_pagecache_size: 1G
+      NEO4J_server_memory_heap_max__size: ${NEO4J_HEAP:-2G}
+      NEO4J_server_memory_pagecache_size: ${NEO4J_PAGECACHE:-1G}
     ports: ["7474:7474", "7687:7687"]
     volumes: [neo4j-data:/data]
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:7474 >/dev/null || exit 1"]
       interval: 5s
       retries: 30
+    restart: unless-stopped
 
   mcp:
-    build: .
+    <<: *kg
     command: ["serve"]
-    environment:
-      KG_NEO4J_URI: bolt://neo4j:7687
-      KG_NEO4J_PASSWORD: ${KG_NEO4J_PASSWORD:-devpassword}
-    ports: ["8000:8000"]
-    depends_on:
-      neo4j: { condition: service_healthy }
+    ports: ["${KG_MCP_PORT:-8000}:8000"]
+    restart: unless-stopped
+
+  # One-off jobs; not started by `docker compose up`.
+  ingest:
+    <<: *kg
+    profiles: [jobs]
+    command: ["ingest"]
+    volumes:
+      - kg-data:/data                 # git mirrors + parse cache, kept between runs
+      - ./repos:/repos:ro             # optional local checkouts for --local-path /repos
+      - ./certs:/certs:ro             # optional corporate CA: set KG_CA_BUNDLE=/certs/ca.crt
 
 volumes:
   neo4j-data:
+  kg-data:

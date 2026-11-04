@@ -3,4 +3,8 @@ data
 tests
 **/__pycache__
 .git
+.github
 .omc
+.env
+repos
+certs
