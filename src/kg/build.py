@@ -26,6 +26,46 @@ class ParsedRepo:
     files: list[ParsedFile] = field(default_factory=list)
 
 
+def java_class_id(repo: str, fqn: str) -> str:
+    return f"java:{repo}:{fqn}"
+
+
+def java_method_ids(class_id: str, methods: list[dict]) -> list[str]:
+    """Node ids for a class's methods, in order (overloads with equal erased signatures get ~2, ~3...)."""
+    seen: dict[str, int] = defaultdict(int)
+    out = []
+    for m in methods:
+        sig = ",".join(base_type(p["type"]) for p in m["params"])
+        mid = f"{class_id}#{m['name']}({sig})"
+        seen[mid] += 1
+        out.append(mid + (f"~{seen[mid]}" if seen[mid] > 1 else ""))
+    return out
+
+
+def ts_symbol_id(repo: str, path: str, name: str) -> str:
+    return f"ts:{repo}:{path}#{name}"
+
+
+def file_id(repo: str, path: str) -> str:
+    return f"file:{repo}:{path}"
+
+
+def symbol_spans(repo: str, path: str, kind: str, data: dict) -> list[tuple[str, int, int, bool]]:
+    """(node id, start_line, end_line, is_member) for the code symbols of one parsed file.
+    is_member is True for methods/functions, False for containers (classes)."""
+    out: list[tuple[str, int, int, bool]] = []
+    if kind == "java":
+        for t in data.get("types", []):
+            cid = java_class_id(repo, t["fqn"])
+            out.append((cid, t["start_line"], t["end_line"], False))
+            for m, mid in zip(t["methods"], java_method_ids(cid, t["methods"])):
+                out.append((mid, m["start_line"], m["end_line"], True))
+    elif kind in ("ts", "tsx"):
+        for s in data.get("symbols", []):
+            out.append((ts_symbol_id(repo, path, s["name"]), s["start_line"], s["end_line"], s["kind"] != "class"))
+    return out
+
+
 def _sha(text: str) -> str:
     return hashlib.sha1(text.encode("utf-8", errors="replace")).hexdigest()
 
@@ -268,13 +308,7 @@ class Builder:
             by_qual[t["qual"]] = c
             self.classes_by_fqn[t["fqn"]].append(c)
             self.jclasses.append(c)
-            seen: dict[str, int] = defaultdict(int)
-            for m in t["methods"]:
-                sig = ",".join(base_type(p["type"]) for p in m["params"])
-                mid = f"{c.id}#{m['name']}({sig})"
-                seen[mid] += 1
-                if seen[mid] > 1:
-                    mid += f"~{seen[mid]}"
+            for m, mid in zip(t["methods"], java_method_ids(c.id, t["methods"])):
                 varargs = any(p.get("varargs") for p in m["params"])
                 c.methods.append((m["name"], len(m["params"]), varargs, mid, m))
                 self.methods_by_name[m["name"]].append(mid)

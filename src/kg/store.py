@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import re
 import time
@@ -131,6 +132,49 @@ class Store:
                  "deleted_edges": deleted_edges, "write_s": round(t1 - t0, 1), "sweep_s": round(time.time() - t1, 1)}
         log.info("neo4j write: %s", stats)
         return stats
+
+    # ------------------------------------------------------------ history (phase 2)
+    def write_history(self, g: Graph) -> dict:
+        """Upsert history nodes, then edges. Unlike write_graph there is no run stamp or sweep: history only
+        accumulates. Edges whose endpoint is not in the database (e.g. a method that no longer exists) are
+        skipped by the MATCH; the File-level MODIFIED edge still records the change."""
+        t0 = time.time()
+        groups: dict[tuple[str, ...], list[dict]] = defaultdict(list)
+        for n in g.nodes.values():
+            labels = tuple(sorted({n.label, *n.extra_labels}))
+            groups[labels].append({"id": safe_id(n.id), "p": safe_props(n.props)})
+        for labels, rows in groups.items():
+            set_labels = ":".join(_label(x) for x in labels)
+            self._batched(f"UNWIND $rows AS r MERGE (n:Node {{id: r.id}}) "
+                          f"SET n += r.p, n:{set_labels}, n.src = 'history'", rows)
+        by_type: dict[str, list[dict]] = defaultdict(list)
+        for e in g.edges.values():
+            by_type[e.type].append({"s": safe_id(e.src), "t": safe_id(e.dst), "p": e.props})
+        written = 0
+        for typ, rows in by_type.items():
+            q = (f"UNWIND $rows AS r MATCH (a:Node {{id: r.s}}) MATCH (b:Node {{id: r.t}}) "
+                 f"MERGE (a)-[e:{_label(typ)}]->(b) SET e += r.p, e.src = 'history' RETURN count(e) AS c")
+            written += self._batched_count(q, rows)
+        stats = {"history_nodes": len(g.nodes), "history_edges": len(g.edges), "history_edges_written": written,
+                 "history_write_s": round(time.time() - t0, 1)}
+        log.info("neo4j history write: %s", stats)
+        return stats
+
+    def history_state(self) -> dict:
+        rows = self.run("MATCH (s:IngestState {id: 'history'}) RETURN s.state AS state")
+        return json.loads(rows[0]["state"]) if rows and rows[0]["state"] else {}
+
+    def save_history_state(self, state: dict) -> None:
+        self.run("MERGE (s:IngestState {id: 'history'}) SET s.state = $state, s.at = datetime()",
+                 state=json.dumps(state))
+
+    def _batched_count(self, q: str, rows: list[dict], **params) -> int:
+        total = 0
+        with self.driver.session(database=self.db) as s:
+            for i in range(0, len(rows), BATCH):
+                total += s.execute_write(lambda tx, chunk: tx.run(q, rows=chunk, **params).single()["c"],
+                                         rows[i:i + BATCH])
+        return total
 
     def _batched(self, q: str, rows: list[dict], **params) -> None:
         with self.driver.session(database=self.db) as s:

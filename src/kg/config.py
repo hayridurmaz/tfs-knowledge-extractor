@@ -31,6 +31,11 @@ class Settings:
     ca_bundle: str = field(default_factory=lambda: _env("CA_BUNDLE"))
     verify_ssl: bool = field(default_factory=lambda: _bool("VERIFY_SSL", True))
 
+    # Phase 2 history: how far back the first run goes, and which work item types are loaded.
+    history_months: int = field(default_factory=lambda: int(_env("HISTORY_MONTHS", "24")))
+    work_item_types: list[str] = field(default_factory=lambda: [t.strip() for t in _env(
+        "WORK_ITEM_TYPES", "Product Backlog Item,Bug,Feature,Epic,Task,User Story").split(",") if t.strip()])
+
     data_dir: Path = field(default_factory=lambda: Path(_env("DATA_DIR", "./data")))
 
     neo4j_uri: str = field(default_factory=lambda: _env("NEO4J_URI", "bolt://localhost:7687"))

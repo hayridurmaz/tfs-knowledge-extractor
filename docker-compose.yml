@@ -3,7 +3,9 @@
 #   docker compose up -d                          Neo4j + MCP server  -> http://localhost:8000/mcp
 #   docker compose run --rm ingest                fetch ADO repos, parse, load the graph (needs KG_ADO_* in .env)
 #   docker compose run --rm ingest ingest --local-path /repos   index folders under ./repos instead of ADO
+#   docker compose run --rm ingest history        commits, pull requests, work items (after ingest)
 #   docker compose run --rm ingest stats          node/edge counts
+#   ./deploy/nightly.sh                           ingest + history, for cron on a server
 #
 # Every setting has a default; put overrides in a .env file next to this one (see .env.example).
 # The image is pulled from GHCR; if it cannot be pulled, Compose builds it from this folder.
@@ -20,6 +22,8 @@ x-kg: &kg
     KG_ADO_API_VERSION: ${KG_ADO_API_VERSION:-5.0}
     KG_REPO_INCLUDE: ${KG_REPO_INCLUDE:-}
     KG_REPO_EXCLUDE: ${KG_REPO_EXCLUDE:-}
+    KG_HISTORY_MONTHS: ${KG_HISTORY_MONTHS:-24}
+    KG_WORK_ITEM_TYPES: ${KG_WORK_ITEM_TYPES:-Product Backlog Item,Bug,Feature,Epic,Task,User Story}
     KG_VERIFY_SSL: ${KG_VERIFY_SSL:-true}
     KG_CA_BUNDLE: ${KG_CA_BUNDLE:-}
     # Corporate HTTP proxy, used by both the REST client (httpx) and git. Empty = direct connection.

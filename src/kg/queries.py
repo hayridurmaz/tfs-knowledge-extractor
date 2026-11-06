@@ -294,6 +294,96 @@ class Queries:
             "http_calls_from_repos": [{"repo": r["repo"], "calls": r["calls"]} for r in calls_in],
         }
 
+    # ------------------------------------------------------------ history (phase 2)
+    def history(self, id: str, limit: int = 20, work_item_types: list[str] | None = None) -> list[dict] | dict:
+        limit = max(1, min(limit, 100))
+        fetch = min(limit * 5, 500) if work_item_types else limit
+        node = self._read("MATCH (n:Node {id: $id}) RETURN n", id=id)
+        if not node:
+            return {"error": f"node not found: {id}"}
+        tail = (
+            "WITH c, collect(DISTINCT t.id) AS touched, sum(coalesce(mod.added, 0)) AS added, "
+            "sum(coalesce(mod.deleted, 0)) AS deleted ORDER BY c.date DESC LIMIT $limit "
+            "RETURN c, touched, added, deleted, "
+            "COLLECT { MATCH (pr:PullRequest)-[:MERGED_AS]->(c) RETURN pr } AS prs, "
+            "COLLECT { MATCH (c)-[r:RESOLVES]->(w:WorkItem) RETURN {w: w, via: r.via, conf: r.confidence} } + "
+            "COLLECT { MATCH (pr:PullRequest)-[:MERGED_AS]->(c) MATCH (pr)-[r:RESOLVES]->(w:WorkItem) "
+            "          RETURN {w: w, via: 'pr-' + r.via, conf: r.confidence} } AS wis")
+        if "Repository" in node[0]["n"].labels:
+            rows = self._read("MATCH (c:Node {repo: $repo}) WHERE c:Commit "
+                              "OPTIONAL MATCH (c)-[mod:MODIFIED]->(t:File) " + tail,
+                              repo=node[0]["n"].get("name"), limit=fetch)
+        else:
+            rows = self._read(
+                "MATCH (n:Node {id: $id}) OPTIONAL MATCH (n)-[:CONTAINS]->(m) WHERE m:Method OR m:Function "
+                "WITH [n] + collect(m) AS targets UNWIND targets AS t "
+                "MATCH (c:Commit)-[mod:MODIFIED]->(t) " + tail, id=id, limit=fetch)
+        out = []
+        types = {t.lower() for t in work_item_types or []}
+        for r in rows:
+            wis: dict[str, dict] = {}
+            for x in r["wis"]:
+                w = x["w"]
+                cur = wis.get(w["id"])
+                if cur is None or (x["conf"] or 0) > cur["confidence"]:
+                    wis[w["id"]] = {"id": w["id"], "number": w.get("number"), "type": w.get("type"),
+                                    "title": w.get("title"), "state": w.get("state"), "via": x["via"],
+                                    "confidence": x["conf"] or 0}
+            if types and not any((w["type"] or "").lower() in types for w in wis.values()):
+                continue
+            c = r["c"]
+            out.append({
+                "commit": c.get("short"), "sha": c.get("sha"), "id": c.get("id"), "repo": c.get("repo"),
+                "date": c.get("date"), "author": c.get("author"), "message": (c.get("message") or "")[:500],
+                "added": r["added"], "deleted": r["deleted"], "touched": r["touched"][:20],
+                "pull_requests": [{"id": p.get("id"), "number": p.get("number"), "title": p.get("title")}
+                                  for p in r["prs"]],
+                "work_items": sorted(wis.values(), key=lambda w: -w["confidence"]),
+            })
+            if len(out) >= limit:
+                break
+        return out
+
+    def work_item(self, id: str | int) -> dict:
+        m = re.search(r"(\d+)\s*$", str(id))
+        if not m:
+            return {"error": f"not a work item id: {id}"}
+        wid = f"wi:{int(m.group(1))}"
+        rows = self._read("MATCH (w:WorkItem {id: $id}) RETURN w", id=wid)
+        if not rows:
+            return {"error": f"work item not found in the graph: {wid} (only items changed in the history window "
+                             f"or referenced from commits/PRs are loaded)"}
+        out = to_json(rows[0]["w"], 0)
+        out.pop("doc", None)
+        rel = self._read(
+            "MATCH (w:WorkItem {id: $id}) "
+            "RETURN COLLECT { MATCH (w)-[:CHILD_OF]->(p) RETURN p } AS parents, "
+            "COLLECT { MATCH (ch)-[:CHILD_OF]->(w) RETURN ch } AS children, "
+            "COLLECT { MATCH (pr:PullRequest)-[r:RESOLVES]->(w) RETURN {pr: pr, via: r.via} } AS prs", id=wid)[0]
+        wi_brief = lambda n: {"id": n.get("id"), "type": n.get("type"), "title": n.get("title"),  # noqa: E731
+                              "state": n.get("state")}
+        out["parent"] = [wi_brief(p) for p in rel["parents"]]
+        out["children"] = [wi_brief(c) for c in rel["children"]][:100]
+        out["pull_requests"] = [{"id": x["pr"].get("id"), "number": x["pr"].get("number"), "repo": x["pr"].get("repo"),
+                                 "title": x["pr"].get("title"), "closed": x["pr"].get("closed"), "via": x["via"]}
+                                for x in rel["prs"]]
+        commits_q = (
+            "CALL { MATCH (c:Commit)-[:RESOLVES]->(:WorkItem {id: $id}) RETURN c "
+            "UNION MATCH (pr:PullRequest)-[:RESOLVES]->(:WorkItem {id: $id}) "
+            "MATCH (pr)-[:MERGED_AS]->(c:Commit) RETURN c } ")
+        commits = self._read(commits_q + "RETURN c ORDER BY c.date DESC LIMIT 100", id=wid)
+        out["commits"] = [{"commit": r["c"].get("short"), "id": r["c"].get("id"), "repo": r["c"].get("repo"),
+                           "date": r["c"].get("date"), "author": r["c"].get("author"), "message": r["c"].get("name")}
+                          for r in commits]
+        touched = self._read(
+            commits_q + "WITH c MATCH (c)-[:MODIFIED]->(t) WHERE t:Method OR t:Function OR t:Class OR t:File "
+            "RETURN t, count(DISTINCT c) AS commits ORDER BY commits DESC LIMIT 200", id=wid)
+        out["touched_code"] = [{**brief(r["t"]), "commits": r["commits"]} for r in touched
+                               if "File" not in r["t"].labels][:50]
+        out["touched_files"] = [{**brief(r["t"]), "commits": r["commits"]} for r in touched
+                                if "File" in r["t"].labels][:50]
+        return out
+
     def cypher(self, query: str, params: dict | None = None, limit: int = 200) -> list[Any]:
         limit = max(1, min(limit, 1000))
         with self.driver.session(database=self.db, default_access_mode=neo4j.READ_ACCESS) as s:

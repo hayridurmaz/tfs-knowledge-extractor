@@ -47,16 +47,29 @@ Built and verified on the original machine:
 - Synthetic scale run: 60 repos / 12k Java files. Parse: 175 s cold, 6.5 s from cache. Build: 205k nodes,
   739k edges, ~580 MB peak memory. No quadratic hotspot in the profile.
 
-**Not yet verified (do these first):**
-1. **Against the real ADO server.** `AdoClient.list_repos` and `GitMirror.fetch` (PAT via `http.extraHeader`,
-   API version `5.0`) have never touched the real server. Check: ADO Server version, TLS/CA (`KG_CA_BUNDLE`), and
-   whether `remoteUrl` from the API is reachable from the cluster.
-2. **Building the Docker image** (`Dockerfile`) through Nexus.
-3. **The k8s manifests** (`deploy/k8s/`) on Rancher: storage class, registry name, Ingress host.
-4. **Precision on real code.** Spot-check `CALLS` and `CONSUMES` edges on 2–3 real services. Look at
-   `parse_errors` on File nodes and at counts from `kg ingest --skip-fetch --dry-run`.
+**Verified on the real environment (2026-11-06):**
+- Docker image built and published by GitHub Actions to `ghcr.io/hayridurmaz/tfs-knowledge-extractor` (tag `v0.1.0`),
+  run with `docker compose` (no local Python).
+- Full ingest against the real ADO server succeeded: **467,020 nodes, 1,068,467 edges**, build 44 s (the Neo4j edge
+  write is the slow part and logs no progress yet). Fixed on the way: proxy pass-through in compose, and over-long
+  range-indexed values ("Property value is too large to index") capped in `store.py`.
 
-### Phase 2: history (NEXT, not started)
+**Still open:**
+1. **Precision on real code.** Spot-check `CALLS` and `CONSUMES` edges on 2–3 real services. Look at
+   `parse_errors` on File nodes and at the `capped over-long indexed value` warnings from the ingest log.
+2. **Production host:** decided: docker compose on a Linux VM with a nightly cron (`deploy/nightly.sh`, README
+   "Run on a server"). The k8s manifests stay for a later move to Rancher.
+
+### Phase 2: history (BUILT 2026-11-06, not yet run against the real server)
+
+Implemented as designed below, with these choices: hunks are mapped by **re-parsing the file at each commit's blob**
+(exact method mapping, through the parse cache) instead of the cheap HEAD-only version; PR→commit uses the PR's
+`lastMergeCommit` (no per-PR commits/work-items calls: work item `ArtifactLink`s already give PR/commit→WI links);
+PR review threads and work item comments are **not** loaded yet. Code: `src/kg/history.py`, `kg history` CLI,
+`Store.write_history`, `Queries.history/work_item`, MCP tools `history` and `work_item`, `tests/test_history.py`.
+Production runs on a server with docker compose + cron (`deploy/nightly.sh`), decided 2026-11-06.
+
+Original design:
 
 Goal: `history(id)` and `work_item(id)` MCP tools that answer "which PBIs and bugs touched this method, and why".
 
@@ -122,10 +135,11 @@ Planned design:
 
 ## 4. Open questions for the user
 
-1. ~~Embedding endpoint?~~ Answered: e5-large and Qwen3-Embedding-8B. Still needed: the endpoint URL, whether it is
-   OpenAI-compatible `/v1/embeddings`, whether it honors `dimensions`, and batch/rate limits.
-2. Which ADO Server version? (`_apis` 5.0 is assumed.) Is a corporate CA needed?
-3. Which work item types and states matter, and is 24 months the right window?
+1. ~~Embedding endpoint?~~ e5-large and Qwen3-Embedding-8B, OpenAI-compatible `/v1/embeddings` (2026-11-06).
+   Still unknown: whether it honors `dimensions`, and batch/rate limits.
+2. ~~ADO Server version / CA?~~ API 5.0 works against the real server (2026-11-06).
+3. ~~Work item types and window?~~ Default type list and the 24-month window are OK; PAT has Work Items (Read).
+4. ~~Production host?~~ Docker compose on a server (2026-11-06).
 
 ## 5. Resuming on a new machine
 

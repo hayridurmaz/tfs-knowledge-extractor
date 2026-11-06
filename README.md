@@ -4,7 +4,8 @@ Builds a knowledge graph of the team's Azure DevOps Server repositories (Java/Sp
 and serves it to coding agents (opencode, Claude Code) through an MCP server.
 Design and roadmap: [ARCHITECTURE.md](ARCHITECTURE.md).
 
-**Status: phase 1 (code graph).** Phases 2–4 (commits/PRs/work items, Confluence, LLM enrichment) are not built yet.
+**Status: phase 1 (code graph) and phase 2 (commits, pull requests, work items).** Phases 3–4 (Confluence +
+semantic search, LLM enrichment) are not built yet.
 
 ## Layout
 
@@ -116,6 +117,44 @@ kg ingest --skip-fetch --dry-run # rebuild from existing mirrors and print count
 
 All settings are `KG_*` environment variables, see [src/kg/config.py](src/kg/config.py).
 
+## History: commits, pull requests, work items
+
+`kg history` runs after `kg ingest` (it reads the same git mirrors) and answers "which PBIs and bugs touched this
+method, and why":
+
+```bash
+docker compose run --rm ingest history                  # or: kg history
+docker compose run --rm ingest history --repos order-service --skip-work-items
+```
+
+- **Commits**: `git log --first-parent` of the default branch. Each diff hunk is mapped to the methods/functions of
+  the file at that commit (re-parsed through the parse cache), plus a File-level edge.
+- **Pull requests**: completed PRs from the ADO API, linked to their merge commit.
+- **Work items**: types in `KG_WORK_ITEM_TYPES` changed in the window, plus every item that commits/PRs refer to
+  and their parents. Links come from ADO artifact links (confidence 1.0), `AB#123` / `#123` in messages (0.8), and
+  numbers in PR branch names like `feature/123-x` (0.6).
+- The first run covers `KG_HISTORY_MONTHS` (24); later runs only add new commits and changed items. The PAT needs
+  **Code (Read)** and **Work Items (Read)**.
+
+MCP tools: `history(id)` (commits + PRs + work items for a method/class/file/repo, newest first, optional
+`work_item_types=["Bug"]`) and `work_item(id)` (fields, parent/children, PRs, commits, changed code).
+
+## Run on a server (docker compose + cron)
+
+On a Linux VM with Docker (about 16 GB RAM for ~100 repos):
+
+```bash
+git clone https://github.com/hayridurmaz/tfs-knowledge-extractor.git /opt/kg && cd /opt/kg
+cp .env.example .env              # ADO URL/project/PAT, KG_IMAGE pinned to a version, Neo4j password
+docker login ghcr.io              # while the package is private
+docker compose up -d              # Neo4j + MCP server on :8000
+./deploy/nightly.sh               # first full run (ingest + history); takes a while
+crontab -e                        # 0 2 * * * /opt/kg/deploy/nightly.sh >> /opt/kg/nightly.log 2>&1
+```
+
+Agents then connect to `http://<vm>:8000/mcp`. Set `NEO4J_HEAP` / `NEO4J_PAGECACHE` in `.env` (e.g. 4G / 4G) and keep
+port 8000 on the internal network: the graph contains all source code.
+
 ## Deploy to Rancher
 
 1. Build and push the image through Nexus:
@@ -149,7 +188,16 @@ frontend screens that depend on it, `endpoints` to find who consumes an HTTP API
 leads; verify them in code.
 ```
 
-## Known limits (phase 1)
+## Known limits
+
+History (phase 2):
+- Only first-parent commits of the default branch: a merged PR appears as its merge commit (the diff against the
+  first parent), not as the individual branch commits.
+- A commit links to a method by today's id; if the method was later renamed or its parameters changed, only the
+  File-level edge remains (and if the file is gone, the change is not linked to code).
+- PR review comments and work item discussion comments are not loaded yet.
+
+Code graph (phase 1):
 
 - Java call resolution works from syntax only (no compiler classpath): receivers typed by locals, params, fields,
   static imports and `this`. Chained calls only resolve when the method name is unique (confidence 0.4).

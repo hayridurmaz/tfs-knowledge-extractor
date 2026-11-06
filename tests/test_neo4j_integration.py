@@ -101,7 +101,8 @@ def test_mcp_tools_registered():
 
     server = create_server(Settings())
     names = {t.name for t in anyio.run(server.list_tools)}
-    assert {"search", "find_symbol", "get_node", "callers", "callees", "impact", "endpoints", "cypher"} <= names
+    assert {"search", "find_symbol", "get_node", "callers", "callees", "impact", "endpoints", "cypher",
+            "history", "work_item"} <= names
 
 
 def test_oversized_indexed_values_are_written(q):
@@ -123,4 +124,54 @@ def test_oversized_indexed_values_are_written(q):
         assert len(rows) == 1 and rows[0]["url"] == huge
     finally:
         st.run("MATCH (n:Node {repo: 'huge-repo'}) DETACH DELETE n")
+        st.close()
+
+
+def test_history_written_and_queried(q, tmp_path):
+    """Commits from a real git repo + a work item, linked onto the fixture code graph."""
+    from conftest import FIND, PLACE, make_history_repo
+
+    from kg.history import HistoryGraph, commit_id, commits_with_spans
+    from kg.pipeline import ParseCache
+    from kg.store import Store
+
+    mirror, shas = make_history_repo(tmp_path)
+    h = HistoryGraph()
+    commits_with_spans(mirror, ParseCache(None), h, since=None, exclude=None)
+    h.add_pull_request("order-service", {"pullRequestId": 77, "title": "Better error in find",
+                                         "sourceRefName": "refs/heads/feature/5555-find",
+                                         "creationDate": "2025-03-01T10:00:00Z",
+                                         "lastMergeCommit": {"commitId": shas["merge"]}})
+    for n, typ, title in ((4321, "Bug", "Total is wrong"), (5555, "Product Backlog Item", "Clear errors")):
+        h.add_work_item({"id": n, "fields": {"System.WorkItemType": typ, "System.Title": title}}, {})
+    st = Store(Settings())
+    try:
+        st.write_history(h.g)
+        st.write_history(h.g)  # idempotent
+        assert st.run("MATCH (c:Commit) RETURN count(c) AS c")[0]["c"] == 4
+
+        hist = q.history(PLACE)
+        assert hist[0]["sha"] == shas["c2"]
+        assert hist[0]["work_items"][0]["id"] == "wi:4321" and hist[0]["work_items"][0]["via"] == "message"
+        f = q.history(FIND)
+        assert f[0]["sha"] == shas["merge"] and f[0]["pull_requests"][0]["number"] == 77
+        assert f[0]["work_items"][0] == {"id": "wi:5555", "number": 5555, "type": "Product Backlog Item",
+                                         "title": "Clear errors", "state": None, "via": "pr-branch",
+                                         "confidence": 0.6}
+        assert [x["sha"] for x in q.history(PLACE, work_item_types=["Bug"])] == [shas["c2"]]
+        assert q.history(FIND, work_item_types=["Bug"]) == []
+        # a class aggregates its methods' history
+        cls = q.history("java:order-service:com.acme.order.service.OrderServiceImpl")
+        assert {shas["c2"], shas["merge"]} <= {x["sha"] for x in cls}
+        assert q.history("repo:order-service")[0]["sha"] == shas["c4"]
+
+        wi = q.work_item("AB#5555")
+        assert wi["title"] == "Clear errors" and wi["pull_requests"][0]["number"] == 77
+        assert wi["commits"][0]["id"] == commit_id("order-service", shas["merge"])
+        assert FIND in {t["id"] for t in wi["touched_code"]}
+        assert "error" in q.work_item("999999")
+        # work items are found by full-text search
+        assert q.search("Total is wrong", kinds=["WorkItem"])[0]["id"] == "wi:4321"
+    finally:
+        st.run("MATCH (n:Node {src: 'history'}) DETACH DELETE n")
         st.close()

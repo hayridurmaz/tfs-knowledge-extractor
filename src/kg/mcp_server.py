@@ -21,6 +21,9 @@ Workflow:
 3. Navigate: `callers` / `callees` (interface dispatch included), `impact` (upstream callers -> exposed endpoints ->
    consumers in other repos -> UI routes), `endpoints` (HTTP API map), `neighbors` (any relationship).
 4. Service level: `list_repos`, `repo_overview`.
+   Why is the code like this: `history(id)` lists the commits, pull requests and work items (PBIs, bugs) that
+   touched a method/class/file, newest first; `work_item(id)` shows a PBI/bug with its parent, children, PRs,
+   commits and the code it changed. `search` also finds commits, PRs and work items by text.
 5. Anything else: `graph_schema` then read-only `cypher`.
 
 Edges inferred heuristically carry `confidence` (0-1); treat < 0.6 as a lead to verify in code, not a fact.
@@ -50,6 +53,16 @@ Relationships (direction as written):
 (Module)-[:PUBLISHES_ARTIFACT]->(MavenArtifact); (Module)-[:DEPENDS_ON {scope,version}]->(MavenArtifact|NpmPackage)
 (Repository)-[:DEPENDS_ON_REPO {via}]->(Repository)
 
+History (src='history'; default branch, first-parent, last ~24 months):
+Commit{sha,short,date(UTC ISO),author,email,message,is_merge}, Person{email}, PullRequest{number,title,status,
+source_branch,target_branch,created,closed,merge_commit}, WorkItem{number,type,title,state,area,iteration,tags,
+priority,severity,assigned_to,created,changed,description,acceptance_criteria,repro_steps} (+Bug|PBI|UserStory|
+Feature|Epic|Task). Ids: commit:<repo>:<sha>, pr:<n>, wi:<n>, person:<email>.
+(Person)-[:AUTHORED]->(Commit); (Commit)-[:MODIFIED {added,deleted,status}]->(File)
+(Commit)-[:MODIFIED {hunks}]->(Method|Function|Class); (PullRequest)-[:MERGED_AS]->(Commit)
+(Commit|PullRequest)-[:RESOLVES {via,confidence}]->(WorkItem)   # via: link 1.0 | message 0.8 | branch 0.6
+(WorkItem)-[:CHILD_OF]->(WorkItem)
+
 Full-text indexes: 'node_text' (names, fqn, path, signature, doc, tokens, url, key) and 'node_code' (code).
 Example: MATCH (c:Controller {repo:'order-service'})-[:CONTAINS]->(m)-[:EXPOSES]->(e) RETURN m.id, e.path
 """
@@ -58,7 +71,7 @@ Example: MATCH (c:Controller {repo:'order-service'})-[:CONTAINS]->(m)-[:EXPOSES]
 def create_server(settings: Settings | None = None) -> MCPServer:
     settings = settings or Settings()
     q = Queries(driver(settings), settings.neo4j_database)
-    mcp = MCPServer(name="kg", title="Team code knowledge graph", instructions=INSTRUCTIONS, version="0.1.0")
+    mcp = MCPServer(name="kg", title="Team code knowledge graph", instructions=INSTRUCTIONS, version="0.2.0")
 
     @mcp.tool()
     def search(query: str, kinds: list[str] | None = None, repo: str | None = None, limit: int = 20,
@@ -118,6 +131,20 @@ def create_server(settings: Settings | None = None) -> MCPServer:
     def repo_overview(repo: str) -> dict:
         """Modules/artifacts, dependencies, top packages, and HTTP traffic to/from other repos for one repo."""
         return q.repo_overview(repo)
+
+    @mcp.tool()
+    def history(id: str, limit: int = 20, work_item_types: list[str] | None = None) -> list[dict] | dict:
+        """Commits that changed a method/function/class/file (or a whole repo), newest first, each with its pull
+        request and the work items (PBIs, bugs) it resolves. Use it to learn WHY code looks the way it does.
+        `work_item_types` keeps only commits linked to those types, e.g. ["Bug"]."""
+        return q.history(id, limit, work_item_types)
+
+    @mcp.tool()
+    def work_item(id: str) -> dict:
+        """A work item (PBI, bug, feature...) by number or id ('12345', 'wi:12345', 'AB#12345'): fields incl.
+        description / acceptance criteria / repro steps, parent and children, pull requests, commits, and the
+        methods and files those commits changed."""
+        return q.work_item(id)
 
     @mcp.tool()
     def graph_schema() -> str:

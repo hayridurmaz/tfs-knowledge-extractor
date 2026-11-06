@@ -21,6 +21,10 @@ def main(argv: list[str] | None = None) -> int:
     ing.add_argument("--skip-fetch", action="store_true", help="use existing mirrors without fetching")
     ing.add_argument("--repos", help="comma-separated repo names to fetch (the graph is still built from all mirrors)")
     ing.add_argument("--dry-run", action="store_true", help="build the graph and print stats, do not write Neo4j")
+    hist = sub.add_parser("history", help="load commits, pull requests and work items (needs mirrors from ingest)")
+    hist.add_argument("--repos", help="comma-separated repo names (default: all mirrors)")
+    hist.add_argument("--skip-prs", action="store_true", help="do not call the pull request API")
+    hist.add_argument("--skip-work-items", action="store_true", help="do not call the work item API")
     sub.add_parser("serve", help="run the MCP server (streamable HTTP)")
     sub.add_parser("stats", help="print node/relationship counts from Neo4j")
     args = ap.parse_args(argv)
@@ -40,6 +44,13 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "ingest":
         return _ingest(s, args)
+
+    if args.cmd == "history":
+        from kg.history import run_history
+        stats = run_history(s, set(args.repos.split(",")) if args.repos else None, args.skip_prs,
+                            args.skip_work_items)
+        print(json.dumps(stats, indent=2))
+        return 1 if stats["repos_failed"] else 0
 
     if args.cmd == "serve":
         from kg.mcp_server import serve
