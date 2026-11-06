@@ -71,7 +71,7 @@ Example: MATCH (c:Controller {repo:'order-service'})-[:CONTAINS]->(m)-[:EXPOSES]
 def create_server(settings: Settings | None = None) -> MCPServer:
     settings = settings or Settings()
     q = Queries(driver(settings), settings.neo4j_database)
-    mcp = MCPServer(name="kg", title="Team code knowledge graph", instructions=INSTRUCTIONS, version="0.2.0")
+    mcp = MCPServer(name="kg", title="Team code knowledge graph", instructions=INSTRUCTIONS, version="0.2.1")
 
     @mcp.tool()
     def search(query: str, kinds: list[str] | None = None, repo: str | None = None, limit: int = 20,

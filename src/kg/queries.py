@@ -316,7 +316,7 @@ class Queries:
         else:
             rows = self._read(
                 "MATCH (n:Node {id: $id}) OPTIONAL MATCH (n)-[:CONTAINS]->(m) WHERE m:Method OR m:Function "
-                "WITH [n] + collect(m) AS targets UNWIND targets AS t "
+                "WITH n, collect(m) AS members WITH [n] + members AS targets UNWIND targets AS t "
                 "MATCH (c:Commit)-[mod:MODIFIED]->(t) " + tail, id=id, limit=fetch)
         out = []
         types = {t.lower() for t in work_item_types or []}

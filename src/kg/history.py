@@ -118,7 +118,7 @@ def parse_git_log(lines: Iterator[str]) -> Iterator[Commit]:
             if SEP_END in line:
                 text = "\n".join(header).split(SEP_END, 1)[0]
                 sha, parents, author, email, when, message = (text.split(SEP_FIELD) + [""] * 6)[:6]
-                cur = Commit(sha, parents.split(), author, email.lower(), utc_iso(when), message.strip())
+                cur = Commit(sha.strip(), parents.split(), author, email.lower(), utc_iso(when), message.strip())
                 header = None
             continue
         if cur is None:

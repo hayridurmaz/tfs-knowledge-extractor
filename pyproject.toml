@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kg"
-version = "0.2.0"
+version = "0.2.1"
 description = "Knowledge graph extractor for Azure DevOps Server + Confluence, served to coding agents via MCP"
 requires-python = ">=3.12"
 dependencies = [

@@ -85,7 +85,8 @@ def test_parse_git_log_edge_cases():
         "+y\n"
         "\x1edef\x1fabc\x1fB\x1fb@x.com\x1f2025-01-03T00:00:00Z\x1fSecond\x1d\n"
     )
-    first, second = list(parse_git_log(iter(raw.splitlines(keepends=True))))
+    # split like the byte stream from git (only on \n); str.splitlines() would also split on \x1d/\x1e
+    first, second = list(parse_git_log(line + "\n" for line in raw.split("\n")))
     assert (first.sha, first.parents, first.email, first.date) == ("abc", ["p1"], "a@x.com", "2025-01-02T00:04:05Z")
     assert first.message == "Subject\n\nBody line"
     a = first.changes["src/my dir/A.java"]
